@@ -17,9 +17,9 @@ def init_db():
     # Use this only if you want to empty the entire schema, which
     # at this case is only 1 table basically. Not sure if the commit is needed in here
     # but just in case it might be a problem it is done.
-    c.execute("""DROP TABLE IF EXISTS articles""")
-    c.execute("""DROP TABLE IF EXISTS medium_authors""")
-    conn.commit()
+    # c.execute("""DROP TABLE IF EXISTS articles""")
+    # c.execute("""DROP TABLE IF EXISTS medium_authors""")
+    # conn.commit()
 
     #Table to store the users and their information only, 
     #the relationship will be through the user_id.
@@ -53,6 +53,7 @@ def init_db():
         section_titles TEXT,
         paragraphs_num INTEGER,
         paragraphs TEXT,
+        UNIQUE(article_id, article_title),
         FOREIGN KEY (author_id) REFERENCES medium_authors(author_id)                
     )""")
 
@@ -248,7 +249,7 @@ def scrape(keyword, amount):
             #                         paragraphs)
 
             sql = """
-                INSERT INTO articles (
+                INSERT OR IGNORE INTO articles (
                     author_id,
                     article_title,
                     article_subtitle,

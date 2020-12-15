@@ -15,14 +15,33 @@ def init_db():
     c = conn.cursor()
 
     # Use this only if you want to empty the entire schema, which
-    # at this case is only 1 table basically.
-    c.execute("""DROP TABLE articles""")
+    # at this case is only 1 table basically. Not sure if the commit is needed in here
+    # but just in case it might be a problem it is done.
+    c.execute("""DROP TABLE IF EXISTS articles""")
+    c.execute("""DROP TABLE IF EXISTS medium_authors""")
     conn.commit()
 
-    c.execute("""CREATE TABLE IF NOT EXISTS articles (
-        article_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    #Table to store the users and their information only, 
+    #the relationship will be through the user_id.
+    #Ultimately it is possible for a large amount of articles,
+    #to have 1 user linked to a couple of articles
+    c.execute("""CREATE TABLE IF NOT EXISTS medium_authors (
+        author_id INTEGER PRIMARY KEY AUTOINCREMENT,
         author TEXT,
         author_url TEXT,
+        UNIQUE(author_id, author)
+    )""")
+
+    conn.commit()
+
+    #Main table to store the articles information
+    #For now there really isn't any benefit to create additoinal
+    #table for the articles, as there is no one-to-many or many-to-many
+    #relationship in here, so no need to include additional complexity
+    #for querying afterwards
+    c.execute("""CREATE TABLE IF NOT EXISTS articles (
+        article_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        author_id INTEGER,
         article_title TEXT,
         article_subtitle TEXT,
         article_url TEXT,
@@ -33,33 +52,17 @@ def init_db():
         sections_num INTEGER,
         section_titles TEXT,
         paragraphs_num INTEGER,
-        paragraphs TEXT                
+        paragraphs TEXT,
+        FOREIGN KEY (author_id) REFERENCES medium_authors(author_id)                
     )""")
 
     conn.commit()
 
     c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS pk_article_id ON articles (article_id ASC)""")
-
+    c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS pk_author_id ON medium_authors (author_id ASC)""")
     conn.commit()
 
     return conn, c
-
-    # Do not really need this for now, as it will be confusing to split all the paragraphs
-    # of an article to have the relationship one to many. No need for additional complexity
-    # for now so using only one table.
-
-    # c.execute("""CREATE TABLE IF NOT EXISTS articles_content (
-    #     content_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    #     article_id INTEGER,
-    #     sections_num INTEGER,
-    #     section_titles TEXT,
-    #     paragraphs_num INTEGER,
-    #     paragraphs TEXT,
-    #     FOREIGN KEY (article_id) REFERENCES articles(article_id)
-    # )""")
-
-    #Close must be once we finish with importing data as well
-    # conn.close()
 
 def convert_num(str_num):
     """
@@ -79,7 +82,7 @@ def get_article_content(url):
     paragraphs_num - paragraphs number 
     paragraphs - paragraphs - actual article content
     """
-    article_page = requests.get(url)
+    article_page = requests.get(url, verify=False)
     article_page_soup = BeautifulSoup(article_page.text, 'html.parser')
 
     sections = article_page_soup.find_all('section')
@@ -132,6 +135,11 @@ def scrape(keyword, amount):
     #init
     conn, conn_cursor = init_db()
 
+    #A set to store all the unique authors obtained as it
+    #will be faster to check in here and it is by defauly only
+    #for unique ones.
+    # unique_authors = set()
+
     cnt = 0
     #We initialize the search from the current day and going backwards
     #as we start from this point later on we ensure that we take T-1
@@ -157,7 +165,7 @@ def scrape(keyword, amount):
 
         url = f'https://medium.com/tag/{keyword}/archive/{year}/{month}/{day}'
         
-        response = requests.get(url)
+        response = requests.get(url, verify=False)
         page = response.text
         soup = BeautifulSoup(page, 'html.parser')
 
@@ -166,7 +174,10 @@ def scrape(keyword, amount):
         for article in articles:
 
             #Extracting all the needed information from the current article
-            article_title = article.find("h3", class_="graf--title").text
+            article_title = article.find("h3", class_="graf--title")
+            if article_title:
+                article_title = article_title.text
+
             article_url = article.find_all("a")[3]['href'].split('?')[0]
             article_subtitle = article.find("h4", class_="graf--subtitle")
             if article_subtitle:
@@ -177,7 +188,10 @@ def scrape(keyword, amount):
             author_url = article.find('div', class_='postMetaInline u-floatLeft u-sm-maxWidthFullWidth')
             author_url = author_url.find('a')['href']
             author = author_url.split("@")[-1]
-            
+
+            #We store our unique autors in a set
+            # unique_authors.add(author)
+
             claps = article.find('button', class_='button button--chromeless u-baseColor--buttonNormal js-multirecommendCountButton u-disablePointerEvents')
             if claps:
                 #We make sure that we take the int and not something like 3.7K
@@ -200,6 +214,17 @@ def scrape(keyword, amount):
             titles_num, titles, paragraphs_num, paragraphs = get_article_content(article_url)
             titles = ", ".join(titles)
             paragraphs = ", ".join(paragraphs)
+
+            #First insert the current author in the authors table
+            
+            conn_cursor.execute("""INSERT OR IGNORE INTO medium_authors (author, author_url)
+                                    VALUES (?, ?)""", (author, author_url))
+            conn.commit()
+
+            #Get the current author unique ID from the DB
+            conn_cursor.execute("SELECT author_id FROM medium_authors WHERE author = ?", (author,))
+            author_id = int(conn_cursor.fetchone()[0])
+
 
             # This worth to be used only if the logic is being extended
             # As of now there isn't really any value added if we init this object, 
@@ -224,8 +249,7 @@ def scrape(keyword, amount):
 
             sql = """
                 INSERT INTO articles (
-                    author,
-                    author_url,
+                    author_id,
                     article_title,
                     article_subtitle,
                     article_url,
@@ -250,7 +274,6 @@ def scrape(keyword, amount):
                     ?,
                     ?,
                     ?,
-                    ?,
                     ?
                 )"""
 
@@ -258,7 +281,7 @@ def scrape(keyword, amount):
             # this might slow down the extraction / insertion phases,
             # so for significant amount of data being taken, a logic can be
             # put in place to do commit on batches per any count / number being selected.
-            conn_cursor.execute(sql, (author, author_url, article_title, article_subtitle, article_url, claps, read_time, responses, current_date, titles_num, titles, paragraphs_num, paragraphs))
+            conn_cursor.execute(sql, (author_id, article_title, article_subtitle, article_url, claps, read_time, responses, current_date, titles_num, titles, paragraphs_num, paragraphs))
             
             conn.commit()  
 
@@ -280,4 +303,4 @@ def scrape(keyword, amount):
     # and thats all folks.
     conn.close()
 
-scrape('machine-learning', 15)
+scrape('bitcoin', 50)

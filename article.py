@@ -4,8 +4,7 @@ class Article:
     Nice to have if we extend the logic.
     """
 
-    def __init__(self, author, 
-                author_url, 
+    def __init__(self, author_id,          
                 article_title, 
                 article_subtitle, 
                 article_url, 
@@ -17,8 +16,7 @@ class Article:
                 section_titles, 
                 paragraphs_num, 
                 paragraphs):
-        self.author = author, 
-        self.author_url = author_url , 
+        self.author = author_id, 
         self.article_title = article_title, 
         self.article_subtitle = article_subtitle, 
         self.article_url = article_url, 
